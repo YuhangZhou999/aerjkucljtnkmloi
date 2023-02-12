@@ -22,8 +22,8 @@ def train_one_epoch(model, optimizer, train_dl, delta_coef=1e-5, tbptt_len=20,
     pbar = tqdm.tqdm(train_dl)
     cum_loss = 0.
     for i, batch in enumerate(pbar):
-        t, dt, adj, i2u_adj, u2i_adj, users, items = batch
-        step_loss, delta_norm, last_xu, last_xi, *_ = model.propagate_update_loss(adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, users, items)
+        t, dt, adj, i2u_adj, u2i_adj, u2u_adj, users, items = batch
+        step_loss, delta_norm, last_xu, last_xi, *_ = model.propagate_update_loss(adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, u2u_adj, users, items)
         loss_pp += step_loss
         loss_norm += delta_norm
         counter += 1
@@ -58,8 +58,8 @@ def rollout(dl, model, last_xu, last_xi):
     ranks = []
     with torch.no_grad():
         for batch in tqdm.tqdm(dl, position=0):
-            t, dt, adj, i2u_adj, u2i_adj, users, items = batch
-            prop_user, prop_item, last_xu, last_xi = model.propagate_update(adj, dt, last_xu, last_xi, i2u_adj, u2i_adj)
+            t, dt, adj, i2u_adj, u2i_adj, u2u_adj, users, items = batch
+            prop_user, prop_item, last_xu, last_xi = model.propagate_update(adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, u2u_adj)
             rs = compute_rank(model, prop_user, prop_item, users, items)
             ranks.extend(rs)
     return last_xu, last_xi, ranks

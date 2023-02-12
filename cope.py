@@ -36,9 +36,9 @@ class CoPE(nn.Module):
         yu, yi = self.propagate_unit(adj, dt, last_xu, last_xi, self.user_states, self.item_states)
         return yu, yi
     
-    def propagate_update(self, adj, dt, last_xu, last_xi, i2u_adj, u2i_adj):
+    def propagate_update(self, adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, u2u_adj):
         yu, yi = self.propagate(adj, dt, last_xu, last_xi)
-        zu, zi, _ = self.update_unit(yu, yi, i2u_adj, u2i_adj)
+        zu, zi, _ = self.update_unit(yu, yi, i2u_adj, u2i_adj, u2u_adj)
         return yu, yi, zu, zi
 
     def compute_matched_scores(self, hu, hi):
@@ -77,13 +77,13 @@ class CoPE(nn.Module):
         loss = -logps[:, 0].mean()
         return loss
     
-    def propagate_update_loss(self, adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, users, items):
+    def propagate_update_loss(self, adj, dt, last_xu, last_xi, i2u_adj, u2i_adj, u2u_adj, users, items):
         # propagate
         yu, yi = self.propagate(adj, dt, last_xu, last_xi)
         # compute loss
         loss = self.compute_loss(yu, yi, users, items)
         # update and return
-        zu, zi, delta_norm = self.update_unit(yu, yi, i2u_adj, u2i_adj)
+        zu, zi, delta_norm = self.update_unit(yu, yi, i2u_adj, u2i_adj, u2u_adj)
         return loss, delta_norm, zu, zi, yu, yi
 
 
@@ -114,15 +114,16 @@ class UpdateUnit(nn.Module):
         self.ii_mapping = nn.Linear(hidden_size, hidden_size)
         self.ui_mapping = nn.Linear(hidden_size, hidden_size, bias=False)
         self.iu_mapping = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.uu_mapping2 = nn.Linear(hidden_size, hidden_size)
         
-    def forward(self, user_embs, item_embs, i2u_prop_mat, u2i_prop_mat):
+    def forward(self, user_embs, item_embs, i2u_prop_mat, u2i_prop_mat, u2u_prop_mat):
         # user_embs: [m, d]
         # item_embs: [n, d]
         # u2i_prop_mat: [n, m]
         # i2u_prop_mat: [m, n]
         # act_fn = torch.tanh
         act_fn = F.relu
-        delta_u = act_fn(self.uu_mapping(user_embs) + i2u_prop_mat @ self.iu_mapping(item_embs))
+        delta_u = act_fn(self.uu_mapping(user_embs) + i2u_prop_mat @ self.iu_mapping(item_embs) + u2u_prop_mat @ self.uu_mapping2(user_embs))
         delta_i = act_fn(self.ii_mapping(item_embs) + u2i_prop_mat @ self.ui_mapping(user_embs))
         u_mask = (torch.sparse.sum(i2u_prop_mat, 1).to_dense() > 0).float()
         i_mask = (torch.sparse.sum(u2i_prop_mat, 1).to_dense() > 0).float()

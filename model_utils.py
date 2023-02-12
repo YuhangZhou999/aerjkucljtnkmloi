@@ -12,10 +12,10 @@ def inverse_degree_array(d):
     return invd
 
 
-def biadjacency_to_laplacian(B):
+def biadjacency_to_laplacian(B, C):
     # 1/2 ( I + D^-1/2 A D^-1/2)
     m, n = B.shape
-    A = sp.vstack([sp.hstack([sp.csc_matrix((m, m)), B]), sp.hstack([B.T, sp.csc_matrix((n, n))])])
+    A = sp.vstack([sp.hstack([C, B]), sp.hstack([B.T, sp.csc_matrix((n, n))])])
     d = np.array(A.sum(0)).squeeze()
     sqrt_inv_d = inverse_degree_array(d) ** .5
     diag_mat = sp.diags(sqrt_inv_d)
@@ -23,14 +23,17 @@ def biadjacency_to_laplacian(B):
     return L
 
 
-def biadjacency_to_propagation(B):
+def biadjacency_to_propagation(B, C):
     d_item = np.array(B.sum(0)).squeeze()
     d_user = np.array(B.sum(1)).squeeze()
+    d_user_user = np.array(C.sum(0)).squeeze()
     invd_item = inverse_degree_array(d_item)
     invd_user = inverse_degree_array(d_user)
+    invd_user_user = inverse_degree_array(d_user_user)
     B_i2u = sp.diags(invd_user) @ B
     B_u2i = sp.diags(invd_item) @ B.T
-    return B_i2u, B_u2i
+    B_u2u = sp.diags(invd_user_user) @ C
+    return B_i2u, B_u2i, B_u2u
 
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):

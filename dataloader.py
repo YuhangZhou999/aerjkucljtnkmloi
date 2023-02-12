@@ -12,12 +12,24 @@ from data_utils import data_split
 def get_dataloaders(df, features, device, ending_time=1., burnin_time=0., alpha=0.99, train_proportion=0.8, coarse=1):
     n_users, n_items = df.iloc[:, :2].max() + 1
     print(f"#Users: {n_users}, #Items: {n_items}, #Interactions: {len(df)}, #Timestamps: {df.timestamp.nunique()}")
-
     train_df, valid_df, test_df, train_feats, valid_feats, test_feats = data_split(train_proportion, df, features)
     t_max = df.iloc[:, 2].max()
     train_df.iloc[:, 2] = (train_df.iloc[:, 2] // coarse) * coarse / t_max * ending_time + burnin_time
     valid_df.iloc[:, 2] = valid_df.iloc[:, 2] / t_max * ending_time + burnin_time
     test_df.iloc[:, 2] = test_df.iloc[:, 2] / t_max * ending_time + burnin_time
+    #valid_df.loc[valid_df['user'] < 0] += 2
+    #test_df.loc[test_df['user'] < 0] += 2
+    #valid_df.loc[valid_df["item"] < 0] += 2
+    #test_df.loc[test_df["item"] < 0] += 2
+    #valid_df.loc[valid_df['user'] < 0] *= -1
+    #test_df.loc[test_df['user'] < 0] *= -1
+    #valid_df.loc[valid_df["item"] < 0] *= -1
+    #test_df.loc[test_df["item"] < 0] *= -1
+    valid_feats = valid_feats[valid_df.iloc[:, 0] >= 0]
+    test_feats = test_feats[test_df.iloc[:, 0] >= 0]
+    valid_df = valid_df[valid_df.iloc[:, 0] >= 0]
+    test_df = test_df[test_df.iloc[:, 0] >= 0]
+    
     train_ds = Dataset(train_df, train_feats, n_users, n_items)
     valid_ds = Dataset(valid_df, valid_feats, n_users, n_items, t0=train_ds.unique_ts[-1], adj0=train_ds[-1][2])
     test_ds = Dataset(test_df, test_feats, n_users, n_items, t0=valid_ds.unique_ts[-1], adj0=valid_ds[-1][2])
@@ -47,18 +59,20 @@ class Dataloader:
 
     def _get_iter(self, start_idx=0):
         B = None
+        C = None
         for i in range(start_idx, len(self.ds)):
             if B is None:
-                t, dt, B, delta_B, users, items, _feats = self.ds.getitem(i, False)
+                t, dt, B, delta_B, C, delta_C, users, items, _feats = self.ds.getitem(i, False)
             else:
                 B += delta_B
-                t, dt, _, delta_B, users, items, _feats = self.ds.getitem(i, True)
-            adj = biadjacency_to_laplacian(B) * self.alpha
-            i2u_adj, u2i_adj = biadjacency_to_propagation(delta_B)
-            adj, i2u_adj, u2i_adj = [sparse_mx_to_torch_sparse_tensor(v).to(self.device) for v in [adj, i2u_adj, u2i_adj]]
+                C += delta_C
+                t, dt, _, delta_B, _, delta_C, users, items, _feats = self.ds.getitem(i, True)
+            adj = biadjacency_to_laplacian(B, C) * self.alpha
+            i2u_adj, u2i_adj, u2u_adj = biadjacency_to_propagation(delta_B, delta_C)
+            adj, i2u_adj, u2i_adj, u2u_adj = [sparse_mx_to_torch_sparse_tensor(v).to(self.device) for v in [adj, i2u_adj, u2i_adj, u2u_adj]]
             users = torch.from_numpy(users).long().to(self.device)
             items = torch.from_numpy(items).long().to(self.device)
-            yield t, dt, adj, i2u_adj, u2i_adj, users, items
+            yield t, dt, adj, i2u_adj, u2i_adj, u2u_adj, users, items
 
 
 class Dataset:
@@ -86,15 +100,18 @@ class Dataset:
         b = self.cum_n_records[idx+1]
         if only_delta:
             observed_mat = None
+            observed_mat2 = None
         else:
             observed_mat = self.build_ui_mat(self.df.iloc[:a])
+            observed_mat2 = self.build_uu_mat(self.df.iloc[:a])
             if self.adj0 is not None:
                 observed_mat += self.adj0
         delta_mat = self.build_ui_mat(self.df.iloc[a:b])
+        delta_mat2 = self.build_uu_mat(self.df.iloc[a:b])
         users = self.df.iloc[a:b, 0].values
         items = self.df.iloc[a:b, 1].values
         feats = self.features[a:b]
-        return t, dt, observed_mat, delta_mat, users, items, feats
+        return t, dt, observed_mat, delta_mat, observed_mat2, delta_mat2, users, items, feats
     
     def process_timestamps(self, ts):
         unique_ts = np.unique(ts)
@@ -108,10 +125,19 @@ class Dataset:
         return self.cum_n_records[exclude_query_idx], self.cum_n_records[include_query_idx]
     
     def build_ui_mat(self, df):
-        row = df.iloc[:, 0]
-        col = df.iloc[:, 1]
-        data = np.ones(len(df))
+        row = df[df.iloc[:, 0] >= 0].iloc[:, 0]
+        col = df[df.iloc[:, 0] >= 0].iloc[:, 1]
+        data = np.ones(len(row))
         adj = sp.csc_matrix((data, (row, col)), shape=[self.n_users, self.n_items])
+        return adj
+
+    def build_uu_mat(self, df):
+        row = df[df.iloc[:, 0] < 0].iloc[:, 0].abs()
+        col = df[df.iloc[:, 1] < 0].iloc[:, 1].abs()
+        row -= 2
+        col -= 2
+        data = np.ones(len(row))
+        adj = sp.csc_matrix((data, (row, col)), shape=[self.n_users, self.n_users])
         return adj
         
     def get_observable_graph(self, query_time):
